@@ -263,6 +263,15 @@ static void clean_deduped(struct dupe_extents **ret_dext)
 	}
 }
 
+static int reset_target_extent(struct dedupe_ctxt *ctxt, struct extent *extent)
+{
+	uint64_t loff = ctxt->ioctl_file_off;
+	struct filerec *file = ctxt->ioctl_file;
+	ctxt->ioctl_file = extent->e_file;
+	ctxt->ioctl_file_off = ctxt->orig_file_off = extent->e_loff;
+	return add_extent_to_dedupe(ctxt, loff, file);
+}
+
 #define	DEDUPE_EXTENTS_CLEANED	(-1)
 static int dedupe_extent_list(struct dupe_extents *dext, uint64_t *fiemap_bytes,
 			      uint64_t *kern_bytes, unsigned long long passno)
@@ -370,7 +379,16 @@ static int dedupe_extent_list(struct dupe_extents *dext, uint64_t *fiemap_bytes,
 				continue;
 		}
 
-		rc = add_extent_to_dedupe(ctxt, extent->e_loff, extent->e_file);
+		/* If this extent is already shared, use it as a target
+		 * in order to minimize unsharing with other shared extents.
+		 */
+		if ((tgt_extent->e_info &&
+		     !tgt_extent->e_info->d_shared_bytes) &&
+		     (extent->e_info && extent->e_info->d_shared_bytes))
+			rc = reset_target_extent(ctxt, extent);
+		else
+			rc = add_extent_to_dedupe(ctxt, extent->e_loff,
+					extent->e_file);
 		if (rc) {
 			if (rc < 0) {
 				/* This can only be ENOMEM. */
